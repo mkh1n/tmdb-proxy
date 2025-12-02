@@ -1,99 +1,94 @@
-import express from "express";
-import fetch from "node-fetch";
-import cors from "cors";
+// app/api/movies/route.ts
+import { NextRequest } from "next/server";
 
-const app = express();
-app.use(cors());
+export async function GET(request: NextRequest) {
+  const { searchParams } = new URL(request.url);
+  const query = (searchParams.get("query") || "").trim();
+  const page = parseInt(searchParams.get("page") || "1", 10);
 
-// Vercel автоматически устанавливает NODE_ENV='production'
-// и предоставляет переменные через process.env
+  const includeMovies = searchParams.get("movies") !== "false";
+  const includeTV = searchParams.get("tv") !== "false";
+  const includePeople = searchParams.get("people") === "true";
 
-const TMDB_API_KEY = process.env.TMDB_API_KEY;
-const TMDB_BEARER_TOKEN = process.env.TMDB_BEARER_TOKEN;
-
-// Проверяем переменные (для отладки в логах Vercel)
-console.log("=== VERCEL DEPLOYMENT ===");
-console.log("NODE_ENV:", process.env.NODE_ENV);
-console.log("TMDB_API_KEY exists:", !!TMDB_API_KEY);
-console.log("TMDB_BEARER_TOKEN exists:", !!TMDB_BEARER_TOKEN);
-console.log("========================");
-
-// Добавляем health check endpoint
-app.get("/", (req, res) => {
-  res.json({
-    status: "online",
-    service: "TMDB Proxy API",
-    environment: process.env.NODE_ENV,
-    timestamp: new Date().toISOString(),
-    endpoints: {
-      popular: "/movies/popular",
-      search: "/movies/search?query=avatar"
-    }
-  });
-});
-
-app.get("/health", (req, res) => {
-  res.json({
-    status: "healthy",
-    tmdb_api_key: TMDB_API_KEY ? "configured" : "missing",
-    tmdb_bearer_token: TMDB_BEARER_TOKEN ? "configured" : "missing"
-  });
-});
-
-// Ваши существующие эндпоинты (оставляем без изменений)
-app.get("/movies/popular", async (req, res) => {
-  try {
-    if (!TMDB_API_KEY || !TMDB_BEARER_TOKEN) {
-      return res.status(500).json({ 
-        error: "API credentials not configured",
-        details: "Check Vercel environment variables"
-      });
-    }
-    
-    const response = await fetch(
-      `https://api.themoviedb.org/3/movie/popular?api_key=${TMDB_API_KEY}&language=en-US&page=1`,
-      {
-        headers: { Authorization: `Bearer ${TMDB_BEARER_TOKEN}` },
-      }
-    );
-    const data = await response.json();
-    res.json(data);
-  } catch (error) {
-    console.error("Error fetching popular movies:", error);
-    res.status(500).json({ 
-      error: "Failed to fetch TMDB data",
-      message: error.message 
-    });
-  }
-});
-
-app.get("/movies/search", async (req, res) => {
-  const { query } = req.query;
-  if (!query) return res.status(400).json({ error: "Query is required" });
+  // const proxyBase = "https://proxy-tmdb-weld.vercel.app/api";
+    const proxyBase = "https://tmdb-proxy-n05lw41zc-mkh1ns-projects.vercel.app";
 
   try {
-    if (!TMDB_API_KEY || !TMDB_BEARER_TOKEN) {
-      return res.status(500).json({ 
-        error: "API credentials not configured"
-      });
-    }
-    
-    const response = await fetch(
-      `https://api.themoviedb.org/3/search/movie?api_key=${TMDB_API_KEY}&query=${encodeURIComponent(query)}`,
-      {
-        headers: { Authorization: `Bearer ${TMDB_BEARER_TOKEN}` },
-      }
-    );
-    const data = await response.json();
-    res.json(data);
-  } catch (error) {
-    console.error("Error searching movies:", error);
-    res.status(500).json({ 
-      error: "Failed to search TMDB",
-      message: error.message 
-    });
-  }
-});
+    let data: any;
+    let totalToFetch = 10; // Сколько запрашиваем у TMDB
 
-// Экспортируем app для Vercel
-export default app;
+    if (!query) {
+      // Без поискового запроса
+      const url = `${proxyBase}/movie/popular?page=${page}&language=ru-RU`;
+      const res = await fetch(url, { 
+          headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${process.env.TMDB_BEARER_TOKEN}`
+    },
+    next: { revalidate: 3600 } });
+      if (!res.ok) throw new Error("Failed to fetch popular movies");
+      data = await res.json();
+
+      // Добавляем media_type
+      data.results = (data.results || []).map((m: any) => ({
+        ...m,
+        media_type: "movie",
+      }));
+    } else {
+      // С поисковым запросом
+      const url = `${proxyBase}/search?query=${encodeURIComponent(
+        query
+      )}&page=${page}&include_adult=false&language=ru-RU`;
+      const res = await fetch(url, { next: { revalidate: 1800 } });
+      if (!res.ok) throw new Error("Search failed");
+      data = await res.json();
+    }
+
+    // const url = `${proxyBase}/genre/tv/list&language=ru-RU`;
+    // const res = await fetch(url, { next: { revalidate: 3600 } });
+    // if (!res.ok) throw new Error("Failed to fetch popular movies");
+    // let ddata = await res.json();
+    // console.log(ddata);
+
+    let results = data.results || [];
+
+    // Применяем фильтры
+    results = results.filter((item: any) => {
+      const mediaType = item.media_type;
+
+      if (includePeople && mediaType === "person") {
+        return true;
+      }
+
+      if (mediaType === "movie") {
+        return includeMovies;
+      }
+      if (mediaType === "tv") {
+        return includeTV;
+      }
+
+      return false;
+    });
+
+    // ОСНОВНОЕ ИСПРАВЛЕНИЕ: НЕ МЕНЯЕМ total_pages от TMDB
+    // Фильтруем только результаты, но сохраняем метаданные от API
+    return Response.json({
+      page: data.page || page,
+      results,
+      total_results: data.total_results || 0, // Оставляем как есть от TMDB
+      total_pages: Math.min(data.total_pages || 1, 500), // Оставляем как есть
+      filtered_count: results.length, // Добавляем поле с фактическим количеством
+    });
+  } catch (error) {
+    console.error("API Error:", error);
+    return Response.json(
+      {
+        page,
+        results: [],
+        total_results: 0,
+        total_pages: 0,
+      },
+      { status: 500 }
+    );
+  }
+}
