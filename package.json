@@ -9,11 +9,18 @@
     "start": "node api/index.js",
     "test": "echo \"No test specified\" && exit 0"
   },
-  "keywords": ["tmdb", "proxy", "vercel", "express", "react-native"],
+  "keywords": [
+    "tmdb",
+    "proxy",
+    "vercel",
+    "express",
+    "react-native"
+  ],
   "author": "Ashmit Dutta",
   "license": "MIT",
   "dependencies": {
     "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
     "express": "^4.18.2",
     "node-fetch": "^3.3.2"
   },
