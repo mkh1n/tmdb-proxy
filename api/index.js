@@ -11,90 +11,24 @@ const TMDB_BASE_URL = "https://api.themoviedb.org/3";
 
 console.log("🚀 Universal TMDB Proxy started");
 
-// УНИВЕРСАЛЬНЫЙ ПРОКСИ ДЛЯ ВСЕХ ЗАПРОСОВ
-app.all("/*", async (req, res) => {
-  try {
-    // Получаем путь (убираем начальный слэш если есть)
-    let tmdbPath = req.path;
-    if (tmdbPath.startsWith('/')) {
-      tmdbPath = tmdbPath.slice(1);
-    }
-    
-    // Сохраняем оригинальные query параметры
-    const originalQuery = new URLSearchParams(req.query);
-    
-    // Создаем новый URLSearchParams с добавленным API ключом
-    const queryParams = new URLSearchParams();
-    
-    // Добавляем API ключ (обязательно)
-    queryParams.append('api_key', TMDB_API_KEY);
-    
-    // Копируем все оригинальные параметры
-    for (const [key, value] of originalQuery.entries()) {
-      queryParams.append(key, value);
-    }
-    
-    // Если не указан язык, добавляем русский по умолчанию
-    if (!queryParams.has('language')) {
-      queryParams.append('language', 'ru-RU');
-    }
-    
-    // Формируем полный URL
-    const tmdbUrl = `${TMDB_BASE_URL}/${tmdbPath}?${queryParams.toString()}`;
-    
-    console.log(`📡 Proxying: ${req.method} ${req.path}`);
-    console.log(`🔗 To TMDB: ${tmdbUrl.replace(TMDB_API_KEY, '***')}`);
-    
-    // Делаем запрос к TMDB API
-    const response = await fetch(tmdbUrl, {
-      method: req.method,
-      headers: {
-        'Authorization': `Bearer ${TMDB_BEARER_TOKEN}`,
-        'Content-Type': 'application/json',
-        'Accept': 'application/json'
-      },
-      // Передаем тело запроса если есть (для POST/PUT)
-      body: req.method !== 'GET' && req.method !== 'HEAD' 
-        ? JSON.stringify(req.body) 
-        : undefined
-    });
-    
-    // Получаем статус и данные
-    const status = response.status;
-    const data = await response.json().catch(() => ({}));
-    
-    console.log(`✅ Response: ${status}`);
-    
-    // Возвращаем ответ от TMDB
-    res.status(status).json(data);
-    
-  } catch (error) {
-    console.error("💥 Proxy error:", error.message);
-    res.status(500).json({
-      error: "Proxy error",
-      message: error.message,
-      path: req.path
-    });
-  }
-});
-
-// Корневой эндпоинт для проверки
+// КОРНЕВОЙ ПУТЬ - документация прокси
 app.get("/", (req, res) => {
   res.json({
     service: "Universal TMDB Proxy",
     status: "online",
-    usage: "Use any TMDB API endpoint",
+    description: "Proxy server for The Movie Database (TMDB) API",
+    usage: "Use any TMDB API endpoint after the domain",
     examples: [
-      "/movie/popular",
-      "/movie/550",
-      "/search/multi?query=avatar",
-      "/discover/movie?with_genres=28&sort_by=popularity.desc",
-      "/trending/all/week",
-      "/tv/1399",
-      "/person/500"
+      `${req.protocol}://${req.get('host')}/movie/popular`,
+      `${req.protocol}://${req.get('host')}/movie/550`,
+      `${req.protocol}://${req.get('host')}/search/multi?query=avatar`,
+      `${req.protocol}://${req.get('host')}/trending/all/week`,
+      `${req.protocol}://${req.get('host')}/tv/1399`,
+      `${req.protocol}://${req.get('host')}/person/500`
     ],
-    note: "All endpoints are proxied to https://api.themoviedb.org/3/",
+    note: "All requests are proxied to https://api.themoviedb.org/3/",
     documentation: "https://developer.themoviedb.org/reference/intro/getting-started",
+    github: "https://github.com/your-repo/tmdb-proxy",
     timestamp: new Date().toISOString()
   });
 });
@@ -103,8 +37,103 @@ app.get("/", (req, res) => {
 app.get("/health", (req, res) => {
   res.json({
     status: "healthy",
+    environment: process.env.NODE_ENV || "development",
     api_key_configured: !!TMDB_API_KEY,
-    bearer_token_configured: !!TMDB_BEARER_TOKEN
+    bearer_token_configured: !!TMDB_BEARER_TOKEN,
+    proxy_url: TMDB_BASE_URL
+  });
+});
+
+// УНИВЕРСАЛЬНЫЙ ПРОКСИ ДЛЯ ВСЕХ TMDB ЗАПРОСОВ
+app.all("/*", async (req, res) => {
+  try {
+    // Получаем путь из URL
+    const path = req.path;
+    
+    // Если путь корневой или /api/, уже обработано выше
+    if (path === "/" || path === "/api" || path === "/health") {
+      return next(); // Пропускаем дальше
+    }
+    
+    // Убираем начальный слэш для TMDB API
+    let tmdbPath = path.startsWith('/') ? path.slice(1) : path;
+    
+    // Создаем query параметры
+    const queryParams = new URLSearchParams();
+    
+    // Добавляем API ключ
+    queryParams.append('api_key', TMDB_API_KEY);
+    
+    // Добавляем все query параметры из запроса
+    Object.keys(req.query).forEach(key => {
+      const value = req.query[key];
+      if (Array.isArray(value)) {
+        value.forEach(v => queryParams.append(key, v));
+      } else {
+        queryParams.append(key, value);
+      }
+    });
+    
+    // Добавляем язык по умолчанию если не указан
+    if (!queryParams.has('language')) {
+      queryParams.append('language', 'ru-RU');
+    }
+    
+    // Формируем URL для TMDB API
+    const tmdbUrl = `${TMDB_BASE_URL}/${tmdbPath}?${queryParams.toString()}`;
+    
+    console.log(`📡 Proxying: ${req.method} ${path} → ${tmdbUrl.replace(TMDB_API_KEY, '***')}`);
+    
+    // Опции для fetch
+    const fetchOptions = {
+      method: req.method,
+      headers: {
+        'Authorization': `Bearer ${TMDB_BEARER_TOKEN}`,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      }
+    };
+    
+    // Добавляем тело запроса для POST/PUT/PATCH
+    if (['POST', 'PUT', 'PATCH'].includes(req.method.toUpperCase()) && req.body) {
+      fetchOptions.body = JSON.stringify(req.body);
+    }
+    
+    // Делаем запрос к TMDB API
+    const response = await fetch(tmdbUrl, fetchOptions);
+    
+    // Получаем данные
+    const data = await response.json().catch(() => ({
+      error: "Failed to parse JSON response",
+      status: response.status
+    }));
+    
+    console.log(`✅ Response status: ${response.status}`);
+    
+    // Возвращаем ответ с тем же статусом
+    res.status(response.status).json(data);
+    
+  } catch (error) {
+    console.error("💥 Proxy error:", error.message);
+    res.status(500).json({
+      error: "Proxy error",
+      message: error.message,
+      path: req.path,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// Обработка 404 для неподдерживаемых маршрутов
+app.use((req, res) => {
+  res.status(404).json({
+    error: "Not found",
+    message: `Route ${req.method} ${req.path} not found`,
+    available_routes: {
+      root: "GET /",
+      health: "GET /health",
+      proxy: "ANY /* (proxies to TMDB API)"
+    }
   });
 });
 
