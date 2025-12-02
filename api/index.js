@@ -1,10 +1,11 @@
 import express from "express";
 import fetch from "node-fetch";
 import cors from "cors";
-import dotenv from "dotenv";
 
-
-dotenv.config({ path: ".env.local" });
+if (process.env.NODE_ENV !== 'production') {
+  // Только в разработке загружаем из .env файла
+  import('dotenv').then(dotenv => dotenv.config({ path: ".env.local" }));
+};
 
 const app = express();
 app.use(cors());
